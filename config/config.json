@@ -1,0 +1,6 @@
+{
+    "mode": "backtest",
+    "symbol": "NIFTY 50",
+    "timeframe": "5m",
+    "use_cache": true
+}

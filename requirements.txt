@@ -7,4 +7,5 @@ matplotlib
 sqlalchemy
 nsepy
 nsetools
+yfinance
 #-e .
