@@ -1,0 +1,10 @@
+pandas
+numpy
+streamlit
+plotly
+ta-lib
+matplotlib
+sqlalchemy
+nsepy
+nsetools
+#-e .

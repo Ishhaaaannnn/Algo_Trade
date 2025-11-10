@@ -1,0 +1,13 @@
+prefix=D:/Projects/Algo_trade/algo_env/Library
+exec_prefix=D:/Projects/Algo_trade/algo_env/Library
+libdir=D:/Projects/Algo_trade/algo_env/Library/lib
+sharedlibdir=D:/Projects/Algo_trade/algo_env/Library/lib
+includedir=D:/Projects/Algo_trade/algo_env/Library/include
+
+Name: zlib
+Description: zlib compression library
+Version: 1.3.1
+
+Requires:
+Libs: -L${libdir} -L${sharedlibdir} -lz
+Cflags: -I${includedir}
