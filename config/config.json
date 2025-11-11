@@ -1,6 +1,13 @@
 {
-    "mode": "backtest",
-    "symbol": "NIFTY 50",
-    "timeframe": "5m",
-    "use_cache": true
+  "mode": "backtest",
+  "symbol": "NIFTY 50",
+  "interval": "5m",
+  "use_cache": true,
+
+
+  "capital": 100000,
+  "transaction_cost": 0.0005,
+  "delta": 1.0,
+  "log_to_db": true,
+  "db_path": "trades.db"
 }

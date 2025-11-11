@@ -80,7 +80,7 @@ def get_history(symbol: str,
     except Exception as e:
         print('[ERROR] get_history() failed, returning empty DataFrame:', e)
         return pd.DataFrame()
-
+    
 def fetch_nifty_data(start: Optional[date] = None,
                      end: Optional[date] = None,
                      force_refresh: bool = False) -> pd.DataFrame:
@@ -107,7 +107,40 @@ def fetch_nifty_data(start: Optional[date] = None,
     print(f"Saved NIFTY data to cache at {fname}")
     return df
 
+# Fetching Live NIFTY Data via Nsetools
+
+from nsetools import Nse
+nse = Nse()
+
+def fetch_live_nifty() -> Optional[float]:
+    try:
+        quote = nse.get_index_quote(index="NIFTY 50")
+        if not isinstance(quote, dict):
+            raise ValueError('Unexpected response from Nsetools.get_index_quote()')
+        last_price = quote.get("last")
+        if last_price is None:
+            raise KeyError('"last" missing in Nsetools response.')
+        return float(str(last_price).replace(' ', ''))
+    except Exception as e:
+        print("Live price fetch failed:", e)
+        return None
+
+def get_data(start: Optional[date] = None,
+             end: Optional[date] = None):
+    
+    if MODE == 'live':
+        print("[MODE] Fetching Live Data")
+        return fetch_live_nifty()
+    elif MODE == 'backtest':
+        print("[MODE] Fetching Historical Data")
+        return fetch_nifty_data(start=start, end=end)
+    else:
+        raise ValueError(f"Invalid MODE:{MODE} in config, must be 'live' or 'backtest'" )
+
 if __name__ == "__main__":
-    nifty_data = fetch_nifty_data()
-    print(nifty_data.head())
-    print(nifty_data.tail())
+    nifty_data = get_data()
+    if isinstance(nifty_data, pd.DataFrame):
+        print(nifty_data.head())
+        print(nifty_data.tail())
+    else:
+        print('Live NIFTY Price:', nifty_data)
