@@ -10,6 +10,31 @@ CONFIG_PATH = os.path.join('config', 'config.json')
 CACHE_DIR = 'cache'
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+
+def _normalize_date_str(dt: Any) -> str:
+    """Normalize a date/datetime/other to a stable YYYY-MM-DD string for filenames."""
+    try:
+        if isinstance(dt, datetime):
+            return dt.strftime('%Y-%m-%d')
+        if isinstance(dt, date):
+            return dt.strftime('%Y-%m-%d')
+    except Exception:
+        pass
+    # fallback to str()
+    return str(dt)
+
+
+def cache_path_for(symbol: str, start: Any, end: Any, timeframe: str) -> str:
+    """Build a stable cache filepath used everywhere (prevents duplicate files).
+
+    Filenames are normalized to: SAFE_SYMBOL_YYYY-MM-DD_YYYY-MM-DD_TIMEFRAME.csv
+    where SAFE_SYMBOL has spaces replaced by underscores and upper-cased.
+    """
+    safe_symbol = symbol.replace(" ", "_").upper()
+    start_s = _normalize_date_str(start)
+    end_s = _normalize_date_str(end)
+    return os.path.join(CACHE_DIR, f"{safe_symbol}_{start_s}_{end_s}_{timeframe}.csv")
+
 def load_config() -> dict:
     if not os.path.exists(CONFIG_PATH):
         raise FileNotFoundError(f"Configuration file not found at {CONFIG_PATH}")
@@ -24,6 +49,34 @@ SYMBOL = config.get('symbol', "NIFTY 50")
 TIMEFRAME = config.get('timeframe', '5m')
 USE_CACHE = bool(config.get('use_cache', True))
 
+def is_empty_df(df: Optional[pd.DataFrame]) -> bool:
+    return df is None or getattr(df, "empty", True)
+
+# Appending Data into cached file
+
+def append_to_cache(cache_file: str, new_data:pd.DataFrame) -> pd.DataFrame:
+    if new_data is None:
+        return pd.DataFrame()
+    try:
+        if os.path.exists(cache_file):
+            old_df = pd.read_csv(cache_file, index_col = 0, parse_dates = True)
+            combined = pd.concat([old_df, new_data])
+            # Drop duplicates by index, keeping the last (newest) occurrence
+            combined = combined[~combined.index.duplicated(keep='last')]
+            combined.sort_index(inplace=True)
+            combined.to_csv(cache_file)
+
+            print(f"[CACHE] Appended {len(new_data)} new rows to {cache_file}")
+            return combined
+    
+        else:
+            new_data.to_csv(cache_file)
+            print(f'[CACHE] Wrote new cache file {cache_file}')
+            return new_data
+    except Exception as e2:
+        print(f"[ERROR] Failed to write cache file: {e2}")
+        return new_data if new_data is not None else pd.DataFrame()
+
 
 # Data Fetching Functions
 
@@ -37,13 +90,33 @@ def get_history(symbol: str,
                 futures: bool = False) -> pd.DataFrame:
     
     try:
-        safe_symbol = symbol.replace(" ", "_").upper()
-        cache_file = os.path.join(CACHE_DIR, f"{safe_symbol}_{start}_{end}_{TIMEFRAME}.csv")
+        cache_file = cache_path_for(symbol, start, end, TIMEFRAME)
 
         if USE_CACHE and os.path.exists(cache_file):
-            print(f"[CACHE] Loading data from {cache_file}")
-            df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
-            return df
+            print(f"[CACHE] Found existing file: {cache_file}")
+            cached = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            last_cached_date = cached.index[-1].date()
+
+            if last_cached_date >= end:
+                print(f'[CACHE] Data already up to date.')
+                return cached
+            
+            new_start = last_cached_date + timedelta(days=1)
+            print(f'[CACHE] Fetching new data from {new_start}, to {end}...')
+            
+            ticker = '^NSEI' if index or symbol.upper() in ['NIFTY 50', 'NIFTY'] else f"{symbol}.NS"
+
+            df_new = yf.download(ticker,
+                                 start=new_start,
+                                 end=end,
+                                 interval=TIMEFRAME,
+                                 progress=False,
+                                 auto_adjust=False)
+            if df_new is None or getattr(df_new, "empty", True):
+                print("[CACHE] No new data fetched, returning cached data.")
+                return cached
+        
+            return append_to_cache(cache_file, df_new)
 
         if index or symbol.upper() in ['NIFTY 50', 'NIFTY']:
             ticker = '^NSEI'
@@ -72,9 +145,8 @@ def get_history(symbol: str,
             print(f"[DEBUG] Cache path: {cache_file}")
             print(f"[DEBUG] DataFrame shape: {df.shape}")
 
-            df.to_csv(cache_file)
-            print(f'[CACHE] Saved data to {cache_file}')
-
+            # write the fetched data to cache path; append_to_cache will merge if file exists
+            append_to_cache(cache_file, df)
         return df
     
     except Exception as e:
@@ -90,8 +162,7 @@ def fetch_nifty_data(start: Optional[date] = None,
     if start is None:
         start = end - timedelta(days=30)
 
-    cache_name = f"{SYMBOL.replace(' ', '_')}_{start}_{end}_{TIMEFRAME}.csv"
-    fname = os.path.join(CACHE_DIR, cache_name)
+    fname = cache_path_for(SYMBOL, start, end, TIMEFRAME)
 
     if os.path.exists(fname) and USE_CACHE and not force_refresh:
         print(f"Loaded cached NIFTY data from {fname}")
@@ -101,9 +172,10 @@ def fetch_nifty_data(start: Optional[date] = None,
 
     df = get_history(SYMBOL, start, end, index=True)
 
-    if df.empty:
+    if df is None or getattr(df, "empty", True):
         raise ValueError("Failed to fetch NIFTY data.")
-    df.to_csv(fname)
+    # Save final fetched data to cache file (append_to_cache will merge if needed).
+    append_to_cache(fname, df)
     print(f"Saved NIFTY data to cache at {fname}")
     return df
 
