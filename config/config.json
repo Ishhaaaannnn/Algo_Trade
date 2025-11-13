@@ -1,13 +1,28 @@
 {
   "mode": "backtest",
   "symbol": "NIFTY 50",
-  "interval": "5m",
+  "timeframe": "5m",
   "use_cache": true,
 
-
   "capital": 100000,
-  "transaction_cost": 0.0005,
-  "delta": 1.0,
-  "log_to_db": true,
-  "db_path": "trades.db"
+  "lot_size": 75,
+  "max_lots": 4,
+
+  "option_settings": {
+    "strike_gap": 100,
+    "option_type_mode": "ITM",
+    "price_multiplier": 0.008,
+    "days_to_expiry": 6
+  },
+
+  "strategy": {
+    "type": "ema_crossover",
+    "short_window": 10,
+    "long_window": 20,
+    "max_risk_pts": 40
+  },
+
+  "logger": {
+    "db_path": "trades.db"
+  }
 }

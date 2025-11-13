@@ -10,9 +10,67 @@ CONFIG_PATH = os.path.join('config', 'config.json')
 CACHE_DIR = 'cache'
 os.makedirs(CACHE_DIR, exist_ok=True)
 
+# Cleaning the DataFrame fetched 
+
+def clean_dataframe(df:pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    
+    df = df.copy()
+
+    # Handle MultiIndex columns from yfinance (e.g., ('Close', '^NSEI'))
+    if isinstance(df.columns, pd.MultiIndex):
+        # Flatten: keep only the column name (first level), drop ticker (second level)
+        df.columns = df.columns.get_level_values(0)
+
+    if 'Price' in df.columns:
+        df.rename(columns={'Price':'DateTime'}, inplace=True)
+    
+    if 'Datetime' in df.columns:
+        df['Datetime'] = pd.to_datetime(df['Datetime'], errors='coerce', utc=True)
+        df.set_index('Datetime', inplace=True)
+    
+    elif not isinstance(df.index, pd.DatetimeIndex):
+        df.index = pd.to_datetime(df.index, errors='coerce', utc=True)
+    
+    # Rename columns (case-insensitive)
+    rename_map = {
+        'Adj Close':'Adj_Close',
+        'Open':'Open',
+        'High':'High',
+        'Low':'Low',
+        'Close':'Close'
+    }
+    df.rename(columns=rename_map, inplace=True)
+
+    # Keep only valid columns that actually exist in the DataFrame
+    valid_cols = ['Open', 'High', 'Low', 'Close', 'Adj_Close', 'Volume']
+    cols_to_keep = [c for c in df.columns if c in valid_cols]
+    
+    if cols_to_keep:
+        df = df[cols_to_keep]
+    else:
+        # If no valid columns, return empty DataFrame
+        return pd.DataFrame()
+    
+    # Convert all numeric columns to float
+    for col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
+        if col != 'Volume':
+            df[col] = df[col].round(2)
+    
+    # Drop rows with NaN Close prices
+    df = df.dropna(subset=['Close'])
+    
+    # Convert UTC timezone to Asia/Kolkata
+    if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+        df.index = df.index.tz_convert('Asia/Kolkata')
+    
+    return df
+
+# Normalizing Dates
 
 def _normalize_date_str(dt: Any) -> str:
-    """Normalize a date/datetime/other to a stable YYYY-MM-DD string for filenames."""
     try:
         if isinstance(dt, datetime):
             return dt.strftime('%Y-%m-%d')
@@ -23,13 +81,10 @@ def _normalize_date_str(dt: Any) -> str:
     # fallback to str()
     return str(dt)
 
+# Assigning Cache file path
 
 def cache_path_for(symbol: str, start: Any, end: Any, timeframe: str) -> str:
-    """Build a stable cache filepath used everywhere (prevents duplicate files).
-
-    Filenames are normalized to: SAFE_SYMBOL_YYYY-MM-DD_YYYY-MM-DD_TIMEFRAME.csv
-    where SAFE_SYMBOL has spaces replaced by underscores and upper-cased.
-    """
+    
     safe_symbol = symbol.replace(" ", "_").upper()
     start_s = _normalize_date_str(start)
     end_s = _normalize_date_str(end)
@@ -77,7 +132,6 @@ def append_to_cache(cache_file: str, new_data:pd.DataFrame) -> pd.DataFrame:
         print(f"[ERROR] Failed to write cache file: {e2}")
         return new_data if new_data is not None else pd.DataFrame()
 
-
 # Data Fetching Functions
 
 def get_history(symbol: str,
@@ -95,6 +149,10 @@ def get_history(symbol: str,
         if USE_CACHE and os.path.exists(cache_file):
             print(f"[CACHE] Found existing file: {cache_file}")
             cached = pd.read_csv(cache_file, index_col=0, parse_dates=True)
+            # Apply timezone conversion to cached data
+            if isinstance(cached.index, pd.DatetimeIndex) and cached.index.tz is not None:
+                cached.index = cached.index.tz_convert('Asia/Kolkata')
+            
             last_cached_date = cached.index[-1].date()
 
             if last_cached_date >= end:
@@ -112,10 +170,12 @@ def get_history(symbol: str,
                                  interval=TIMEFRAME,
                                  progress=False,
                                  auto_adjust=False)
+            
             if df_new is None or getattr(df_new, "empty", True):
                 print("[CACHE] No new data fetched, returning cached data.")
                 return cached
-        
+            
+            df_new = clean_dataframe(df_new)
             return append_to_cache(cache_file, df_new)
 
         if index or symbol.upper() in ['NIFTY 50', 'NIFTY']:
@@ -141,11 +201,13 @@ def get_history(symbol: str,
         if not isinstance(df, pd.DataFrame) or df.empty:
             raise ValueError(f"No data returned from yfinance for {symbol}")
         
+        # Clean the DataFrame (rename columns, convert types, handle timezone)
+        df = clean_dataframe(df)
+        
         if USE_CACHE:
             print(f"[DEBUG] Cache path: {cache_file}")
             print(f"[DEBUG] DataFrame shape: {df.shape}")
 
-            # write the fetched data to cache path; append_to_cache will merge if file exists
             append_to_cache(cache_file, df)
         return df
     
@@ -160,13 +222,17 @@ def fetch_nifty_data(start: Optional[date] = None,
     if end is None:
         end = date.today()
     if start is None:
-        start = end - timedelta(days=30)
+        start = end - timedelta(days=59)
 
     fname = cache_path_for(SYMBOL, start, end, TIMEFRAME)
 
     if os.path.exists(fname) and USE_CACHE and not force_refresh:
         print(f"Loaded cached NIFTY data from {fname}")
-        return pd.read_csv(fname, index_col=0, parse_dates=True)
+        cached_df = pd.read_csv(fname, index_col=0, parse_dates=True)
+        # Apply timezone conversion to cached data as well
+        if isinstance(cached_df.index, pd.DatetimeIndex) and cached_df.index.tz is not None:
+            cached_df.index = cached_df.index.tz_convert('Asia/Kolkata')
+        return cached_df
     
     print(f'Fetching NIFTY data from {start} to {end}...')
 
@@ -174,7 +240,7 @@ def fetch_nifty_data(start: Optional[date] = None,
 
     if df is None or getattr(df, "empty", True):
         raise ValueError("Failed to fetch NIFTY data.")
-    # Save final fetched data to cache file (append_to_cache will merge if needed).
+    
     append_to_cache(fname, df)
     print(f"Saved NIFTY data to cache at {fname}")
     return df
